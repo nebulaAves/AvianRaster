@@ -5,10 +5,14 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QSizePolicy, QLineEdit, QScrollArea, QTextEdit, QStatusBar
 )
 from PyQt5.QtGui import QPixmap, QColor, QImage
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal, QObject
 from PIL import Image
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+import os
+
+class WorkerSignals(QObject):
+    message = pyqtSignal(str)
 
 class ColorWidgetItem(QWidget):
     def __init__(self, percentage, rgb_color):
@@ -137,6 +141,12 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
 
+        self.signals = WorkerSignals()
+        self.signals.message.connect(self.update_console)
+
+    def update_console(self, message):
+        self.console.append(message)
+
     def choose_file(self):
         self.clear_previous_results()
         self.status_bar.showMessage("Choosing file...")
@@ -144,23 +154,27 @@ class MainWindow(QMainWindow):
         filepath, _ = file_dialog.getOpenFileName(self, "Choose File", "", "Image Files (*.png *.jpg *.jpeg *.pdf)")
 
         if filepath:
-            # Load image and resize if needed
-            self.status_bar.showMessage(f"Loading file: {filepath}")
-            img = Image.open(filepath)
-            img = self.resize_image(img)  # Resize image if it's too large
+            try:
+                # Load image and resize if needed
+                self.status_bar.showMessage(f"Loading file: {filepath}")
+                img = Image.open(filepath)
+                img = self.resize_image(img)  # Resize image if it's too large
 
-            # Convert Pillow Image to QPixmap
-            qimage = self.pil_image_to_qimage(img)
-            pixmap = QPixmap.fromImage(qimage)
-            self.image_label.setPixmap(pixmap)
-            self.image_label.setAlignment(Qt.AlignCenter)
+                # Convert Pillow Image to QPixmap
+                qimage = self.pil_image_to_qimage(img)
+                pixmap = QPixmap.fromImage(qimage)
+                self.image_label.setPixmap(pixmap)
+                self.image_label.setAlignment(Qt.AlignCenter)
 
-            # Calculate color percentages and display
-            self.status_bar.showMessage("Calculating color percentages...")
-            colors = self.calculate_color_percentages(img)
-            self.display_color_entries(colors)
+                # Calculate color percentages and display
+                self.status_bar.showMessage("Calculating color percentages...")
+                colors = self.calculate_color_percentages(img)
+                self.display_color_entries(colors)
 
-            self.status_bar.showMessage("File loaded and processed successfully.", 3000)  # 3 seconds duration
+                self.status_bar.showMessage("File loaded and processed successfully.", 3000)  # 3 seconds duration
+            except Exception as e:
+                self.update_console(f"Error processing file: {e}")
+                self.status_bar.showMessage("Error processing file.", 3000)
 
     def resize_image(self, img, max_size=1024):
         # Resize image if it's larger than max_size x max_size
@@ -186,6 +200,8 @@ class MainWindow(QMainWindow):
         width, height = img.size
         piece_height = height // 10
 
+        self.signals.message.emit("Image processing started...")
+
         # Create a ThreadPoolExecutor to process image parts in parallel
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = []
@@ -195,6 +211,7 @@ class MainWindow(QMainWindow):
                 bottom = (i + 1) * piece_height if i < 9 else height
                 image_part = img.crop((0, top, width, bottom))
                 futures.append(executor.submit(process_image_part, image_part))
+                self.signals.message.emit(f"Part {i+1}/10 processing...")
 
             # Collect the results
             color_counts_list = [future.result() for future in futures]
@@ -214,6 +231,7 @@ class MainWindow(QMainWindow):
         # Sort colors by percentage (descending)
         colors.sort(reverse=True, key=lambda x: x[0])
 
+        self.signals.message.emit("Image processing completed.")
         return colors
 
     def display_color_entries(self, colors):
